@@ -2,8 +2,9 @@ import { useState } from "react";
 import axios from "axios";
 import "./App.css";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
+).replace(/\/$/, "");
 
 function formatPrice(price) {
   if (price === null || price === undefined || price === "") return "מחיר לא צוין";
@@ -14,6 +15,16 @@ function formatPrice(price) {
   return `₪ ${numericPrice.toLocaleString("he-IL")}`;
 }
 
+function getYad2Url(apartment) {
+  if (apartment?.yad2_url) return apartment.yad2_url;
+
+  if (apartment?.token) {
+    return `https://www.yad2.co.il/realestate/item/center-and-sharon/${apartment.token}`;
+  }
+
+  return "https://www.yad2.co.il/realestate/rent";
+}
+
 function App() {
   const [prompt, setPrompt] = useState(
     "חפש לי דירה בהרצליה, פתח תקווה, קרית אונו, רעננה, כפר סבא ממד מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
@@ -21,7 +32,6 @@ function App() {
 
   const [apartments, setApartments] = useState([]);
   const [filters, setFilters] = useState(null);
-
   const [selectedApartment, setSelectedApartment] = useState(null);
   const [expandedImage, setExpandedImage] = useState(null);
 
@@ -30,75 +40,67 @@ function App() {
   const [error, setError] = useState("");
 
   async function handleSearch() {
-  setLoading(true);
-  setProgress(0);
-  setError("");
-  setApartments([]);
-  setFilters(null);
-  setSelectedApartment(null);
-  setExpandedImage(null);
-
-  let pollTimer = null;
-
-  try {
-    const startResponse = await axios.post(`${API_BASE_URL}/api/search/start`, {
-      prompt,
-    });
-
-    const jobId = startResponse.data.job_id;
-
-    pollTimer = setInterval(async () => {
-      try {
-        const progressResponse = await axios.get(
-          `${API_BASE_URL}/api/search/progress/${jobId}`
-        );
-
-        const job = progressResponse.data;
-
-        setProgress(job.progress || 0);
-
-        if (job.status) {
-          console.log("Search status:", job.status);
-        }
-
-        if (job.done) {
-          clearInterval(pollTimer);
-
-          if (job.success && job.result) {
-            setProgress(100);
-            setApartments(job.result.apartments || []);
-            setFilters(job.result.filters || null);
-          } else {
-            setError(job.error || "שגיאה בחיפוש");
-          }
-
-          setTimeout(() => {
-            setLoading(false);
-            setProgress(0);
-          }, 700);
-        }
-      } catch (err) {
-        clearInterval(pollTimer);
-        setError(err.message || "שגיאה בבדיקת התקדמות");
-        setLoading(false);
-        setProgress(0);
-      }
-    }, 800);
-  } catch (err) {
-    if (pollTimer) clearInterval(pollTimer);
-
-    setError(err.response?.data?.detail || err.message || "שגיאה בהתחלת החיפוש");
-    setLoading(false);
+    setLoading(true);
     setProgress(0);
-  }
-}
+    setError("");
+    setApartments([]);
+    setFilters(null);
+    setSelectedApartment(null);
+    setExpandedImage(null);
 
-  async function handleOpenInYad2(apartment) {
+    let pollTimer = null;
+
     try {
-      await axios.post(`${API_BASE_URL}/api/search/open-browser`, apartment);
+      const startResponse = await axios.post(`${API_BASE_URL}/api/search/start`, {
+        prompt,
+      });
+
+      const jobId = startResponse.data.job_id;
+
+      pollTimer = setInterval(async () => {
+        try {
+          const progressResponse = await axios.get(
+            `${API_BASE_URL}/api/search/progress/${jobId}`
+          );
+
+          const job = progressResponse.data;
+          setProgress(job.progress || 0);
+
+          if (job.done) {
+            clearInterval(pollTimer);
+
+            if (job.success && job.result) {
+              setProgress(100);
+              setApartments(job.result.apartments || []);
+              setFilters(job.result.filters || null);
+            } else {
+              setError(job.error || "שגיאה בחיפוש");
+            }
+
+            setTimeout(() => {
+              setLoading(false);
+              setProgress(0);
+            }, 700);
+          }
+        } catch (err) {
+          clearInterval(pollTimer);
+          setError(err.message || "שגיאה בבדיקת התקדמות");
+          setLoading(false);
+          setProgress(0);
+        }
+      }, 800);
     } catch (err) {
-      console.error("open browser error", err);
+      if (pollTimer) clearInterval(pollTimer);
+
+      setError(err.response?.data?.detail || err.message || "שגיאה בהתחלת החיפוש");
+      setLoading(false);
+      setProgress(0);
     }
+  }
+
+  function handleOpenInYad2(apartment) {
+    const url = getYad2Url(apartment);
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   return (
