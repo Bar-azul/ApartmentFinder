@@ -2,18 +2,14 @@ import { useState } from "react";
 import axios from "axios";
 import "./App.css";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 function formatPrice(price) {
-  if (price === null || price === undefined || price === "") {
-    return "מחיר לא צוין";
-  }
+  if (price === null || price === undefined || price === "") return "מחיר לא צוין";
 
   const numericPrice = Number(price);
-
-  if (Number.isNaN(numericPrice)) {
-    return "מחיר לא צוין";
-  }
+  if (Number.isNaN(numericPrice)) return "מחיר לא צוין";
 
   return `₪ ${numericPrice.toLocaleString("he-IL")}`;
 }
@@ -22,32 +18,62 @@ function App() {
   const [prompt, setPrompt] = useState(
     "חפש לי דירה בהרצליה, פתח תקווה, קרית אונו, רעננה, כפר סבא ממד מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
   );
+
   const [apartments, setApartments] = useState([]);
   const [filters, setFilters] = useState(null);
+
   const [selectedApartment, setSelectedApartment] = useState(null);
   const [expandedImage, setExpandedImage] = useState(null);
+
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
 
   async function handleSearch() {
     setLoading(true);
+    setProgress(0);
     setError("");
     setApartments([]);
     setFilters(null);
     setSelectedApartment(null);
     setExpandedImage(null);
 
+    const progressTimer = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 95) return prev;
+        const next = prev + Math.floor(Math.random() * 6) + 2;
+        return next > 95 ? 95 : next;
+      });
+    }, 700);
+
     try {
       const response = await axios.post(`${API_BASE_URL}/api/search/prompt`, {
         prompt,
       });
 
-      setApartments(response.data.apartments || []);
-      setFilters(response.data.filters || null);
+      setProgress(100);
+
+      setTimeout(() => {
+        setApartments(response.data.apartments || []);
+        setFilters(response.data.filters || null);
+      }, 300);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || "שגיאה בחיפוש");
     } finally {
-      setLoading(false);
+      clearInterval(progressTimer);
+
+      setTimeout(() => {
+        setLoading(false);
+        setProgress(0);
+      }, 800);
+    }
+  }
+
+  async function handleOpenInYad2(apartment) {
+    try {
+      await axios.post(`${API_BASE_URL}/api/search/open-browser`, apartment);
+    } catch (err) {
+      console.error("open browser error", err);
     }
   }
 
@@ -69,6 +95,8 @@ function App() {
           {loading ? "מחפש..." : "חפש דירות"}
         </button>
       </section>
+
+      {loading && <SearchProgress progress={progress} />}
 
       {error && <div className="error">{error}</div>}
 
@@ -99,21 +127,48 @@ function App() {
           apartment={selectedApartment}
           onClose={() => setSelectedApartment(null)}
           onImageOpen={setExpandedImage}
+          onOpenInYad2={() => handleOpenInYad2(selectedApartment)}
         />
       )}
 
       {expandedImage && (
         <div className="image-lightbox" onClick={() => setExpandedImage(null)}>
-          <button className="lightbox-close" onClick={() => setExpandedImage(null)}>
+          <button
+            className="lightbox-close"
+            onClick={() => setExpandedImage(null)}
+          >
             ×
           </button>
+
           <img
             src={expandedImage}
-            alt="expanded apartment"
+            alt="expanded"
             onClick={(e) => e.stopPropagation()}
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function SearchProgress({ progress }) {
+  return (
+    <div className="search-progress">
+      <div className="progress-header">
+        <span>מחפש ומעשיר מודעות...</span>
+        <strong>{progress}%</strong>
+      </div>
+
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${progress}%` }} />
+      </div>
+
+      <div className="progress-steps">
+        <span className={progress >= 15 ? "active" : ""}>Map API</span>
+        <span className={progress >= 45 ? "active" : ""}>פתיחת מודעות</span>
+        <span className={progress >= 75 ? "active" : ""}>זיהוי מאפיינים</span>
+        <span className={progress >= 100 ? "active" : ""}>סיום</span>
+      </div>
     </div>
   );
 }
@@ -149,6 +204,8 @@ function ApartmentCard({ apartment, onOpen }) {
           <span>קומה {apartment.floor ?? "-"}</span>
         </div>
 
+        <FeatureBadges features={apartment.features} compact />
+
         <button className="details-link-button" onClick={onOpen}>
           פתח מודעה
         </button>
@@ -157,7 +214,7 @@ function ApartmentCard({ apartment, onOpen }) {
   );
 }
 
-function ApartmentModal({ apartment, onClose, onImageOpen }) {
+function ApartmentModal({ apartment, onClose, onImageOpen, onOpenInYad2 }) {
   const images = apartment.images?.length
     ? apartment.images
     : apartment.cover_image
@@ -165,10 +222,7 @@ function ApartmentModal({ apartment, onClose, onImageOpen }) {
       : [];
 
   const description =
-    apartment.description ||
-    apartment.text ||
-    apartment.title ||
-    "אין תיאור זמין מה־API הנוכחי. נשלוף תיאור מלא כשנחבר endpoint של פרטי מודעה.";
+    apartment.description || apartment.text || apartment.title || "אין תיאור זמין.";
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -178,12 +232,12 @@ function ApartmentModal({ apartment, onClose, onImageOpen }) {
         </button>
 
         <div className="modal-gallery">
-          {images.length > 0 ? (
+          {images.length ? (
             images.map((img, index) => (
               <img
                 key={`${img}-${index}`}
                 src={img}
-                alt={`apartment-${index}`}
+                alt={`img-${index}`}
                 onClick={() => onImageOpen(img)}
               />
             ))
@@ -200,50 +254,76 @@ function ApartmentModal({ apartment, onClose, onImageOpen }) {
             {apartment.square_meter || "-"} מ״ר
           </h3>
 
+          <FeatureBadges features={apartment.features} />
+
           <div className="description-box">
             <h4>תיאור</h4>
             <p>{description}</p>
           </div>
 
           <div className="modal-details-grid">
-            <p>
-              <strong>עיר:</strong> {apartment.city || "-"}
-            </p>
-
-            <p>
-              <strong>שכונה:</strong> {apartment.neighborhood || "-"}
-            </p>
-
+            <p><strong>עיר:</strong> {apartment.city || "-"}</p>
+            <p><strong>שכונה:</strong> {apartment.neighborhood || "-"}</p>
             <p>
               <strong>רחוב:</strong> {apartment.street || "-"}{" "}
               {apartment.house_number || ""}
             </p>
-
-            <p>
-              <strong>קומה:</strong> {apartment.floor ?? "-"}
-            </p>
-
-            <p>
-              <strong>מספר מודעה:</strong> {apartment.order_id || "-"}
-            </p>
-
-            <p>
-              <strong>Token:</strong> {apartment.token || "-"}
-            </p>
+            <p><strong>קומה:</strong> {apartment.floor ?? "-"}</p>
+            <p><strong>מספר מודעה:</strong> {apartment.order_id || "-"}</p>
+            <p><strong>Token:</strong> {apartment.token || "-"}</p>
           </div>
 
-          {apartment.lat && apartment.lon && (
-            <a
-              className="map-link"
-              href={`https://www.google.com/maps?q=${apartment.lat},${apartment.lon}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              פתח מיקום במפה
-            </a>
-          )}
+          <div className="modal-actions">
+            {apartment.lat && apartment.lon && (
+              <a
+                className="map-link"
+                href={`https://www.google.com/maps?q=${apartment.lat},${apartment.lon}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                פתח מיקום במפה
+              </a>
+            )}
+
+            <button className="open-yad2-button" onClick={onOpenInYad2}>
+              לפתיחה ביד 2
+            </button>
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function FeatureBadges({ features, compact = false }) {
+  if (!features) return null;
+
+  const items = [
+    { key: "mamad", label: "ממ״ד" },
+    { key: "elevator", label: "מעלית" },
+    { key: "parking", label: "חניה" },
+    { key: "air_conditioner", label: "מיזוג" },
+    { key: "balcony", label: "מרפסת" },
+    { key: "furniture", label: "ריהוט" },
+    { key: "renovated", label: "משופצת" },
+    { key: "pets_allowed", label: "בעלי חיים" },
+  ];
+
+  const active = items.filter((item) => features[item.key]);
+
+  if (!active.length) {
+    return compact ? null : (
+      <div className="features-empty">לא נמצאו מאפיינים מיוחדים</div>
+    );
+  }
+
+  return (
+    <div className={compact ? "features-row compact" : "features-row"}>
+      {active.map((item) => (
+        <span key={item.key} className="feature-badge">
+          {item.label}
+        </span>
+      ))}
     </div>
   );
 }
