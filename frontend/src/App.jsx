@@ -1,0 +1,251 @@
+import { useState } from "react";
+import axios from "axios";
+import "./App.css";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+function formatPrice(price) {
+  if (price === null || price === undefined || price === "") {
+    return "מחיר לא צוין";
+  }
+
+  const numericPrice = Number(price);
+
+  if (Number.isNaN(numericPrice)) {
+    return "מחיר לא צוין";
+  }
+
+  return `₪ ${numericPrice.toLocaleString("he-IL")}`;
+}
+
+function App() {
+  const [prompt, setPrompt] = useState(
+    "חפש לי דירה בהרצליה, פתח תקווה, קרית אונו, רעננה, כפר סבא ממד מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
+  );
+  const [apartments, setApartments] = useState([]);
+  const [filters, setFilters] = useState(null);
+  const [selectedApartment, setSelectedApartment] = useState(null);
+  const [expandedImage, setExpandedImage] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSearch() {
+    setLoading(true);
+    setError("");
+    setApartments([]);
+    setFilters(null);
+    setSelectedApartment(null);
+    setExpandedImage(null);
+
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/search/prompt`, {
+        prompt,
+      });
+
+      setApartments(response.data.apartments || []);
+      setFilters(response.data.filters || null);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || "שגיאה בחיפוש");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="page" dir="rtl">
+      <header className="hero">
+        <h1>ApartmentFinder</h1>
+        <p>חיפוש דירות חכם באמצעות Prompt + Yad2 API</p>
+      </header>
+
+      <section className="search-box">
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="לדוגמה: חפש לי דירה בהרצליה עד 3500 שקל עם 2 חדרים"
+        />
+
+        <button onClick={handleSearch} disabled={loading}>
+          {loading ? "מחפש..." : "חפש דירות"}
+        </button>
+      </section>
+
+      {error && <div className="error">{error}</div>}
+
+      {filters && (
+        <section className="filters-box">
+          <h3>פילטרים שהמערכת הבינה</h3>
+          <pre>{JSON.stringify(filters, null, 2)}</pre>
+        </section>
+      )}
+
+      <section className="results-header">
+        <h2>תוצאות</h2>
+        <span>{apartments.length} דירות נמצאו</span>
+      </section>
+
+      <section className="grid">
+        {apartments.map((apartment) => (
+          <ApartmentCard
+            key={`${apartment.order_id}-${apartment.token}`}
+            apartment={apartment}
+            onOpen={() => setSelectedApartment(apartment)}
+          />
+        ))}
+      </section>
+
+      {selectedApartment && (
+        <ApartmentModal
+          apartment={selectedApartment}
+          onClose={() => setSelectedApartment(null)}
+          onImageOpen={setExpandedImage}
+        />
+      )}
+
+      {expandedImage && (
+        <div className="image-lightbox" onClick={() => setExpandedImage(null)}>
+          <button className="lightbox-close" onClick={() => setExpandedImage(null)}>
+            ×
+          </button>
+          <img
+            src={expandedImage}
+            alt="expanded apartment"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ApartmentCard({ apartment, onOpen }) {
+  const image =
+    apartment.cover_image ||
+    apartment.images?.[0] ||
+    "https://placehold.co/600x400?text=No+Image";
+
+  return (
+    <article className="card">
+      <img src={image} alt="apartment" />
+
+      <div className="card-content">
+        <div className="price">{formatPrice(apartment.price)}</div>
+
+        <h3>
+          {apartment.property_type || "נכס"} · {apartment.rooms || "-"} חדרים
+        </h3>
+
+        <p className="location">
+          {apartment.city || ""}
+          {apartment.neighborhood ? `, ${apartment.neighborhood}` : ""}
+        </p>
+
+        <p>
+          {apartment.street || ""} {apartment.house_number || ""}
+        </p>
+
+        <div className="meta">
+          <span>{apartment.square_meter || "-"} מ״ר</span>
+          <span>קומה {apartment.floor ?? "-"}</span>
+        </div>
+
+        <button className="details-link-button" onClick={onOpen}>
+          פתח מודעה
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ApartmentModal({ apartment, onClose, onImageOpen }) {
+  const images = apartment.images?.length
+    ? apartment.images
+    : apartment.cover_image
+      ? [apartment.cover_image]
+      : [];
+
+  const description =
+    apartment.description ||
+    apartment.text ||
+    apartment.title ||
+    "אין תיאור זמין מה־API הנוכחי. נשלוף תיאור מלא כשנחבר endpoint של פרטי מודעה.";
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose}>
+          ×
+        </button>
+
+        <div className="modal-gallery">
+          {images.length > 0 ? (
+            images.map((img, index) => (
+              <img
+                key={`${img}-${index}`}
+                src={img}
+                alt={`apartment-${index}`}
+                onClick={() => onImageOpen(img)}
+              />
+            ))
+          ) : (
+            <div className="no-image">אין תמונות</div>
+          )}
+        </div>
+
+        <div className="modal-content">
+          <h2>{formatPrice(apartment.price)}</h2>
+
+          <h3>
+            {apartment.property_type || "נכס"} · {apartment.rooms || "-"} חדרים ·{" "}
+            {apartment.square_meter || "-"} מ״ר
+          </h3>
+
+          <div className="description-box">
+            <h4>תיאור</h4>
+            <p>{description}</p>
+          </div>
+
+          <div className="modal-details-grid">
+            <p>
+              <strong>עיר:</strong> {apartment.city || "-"}
+            </p>
+
+            <p>
+              <strong>שכונה:</strong> {apartment.neighborhood || "-"}
+            </p>
+
+            <p>
+              <strong>רחוב:</strong> {apartment.street || "-"}{" "}
+              {apartment.house_number || ""}
+            </p>
+
+            <p>
+              <strong>קומה:</strong> {apartment.floor ?? "-"}
+            </p>
+
+            <p>
+              <strong>מספר מודעה:</strong> {apartment.order_id || "-"}
+            </p>
+
+            <p>
+              <strong>Token:</strong> {apartment.token || "-"}
+            </p>
+          </div>
+
+          {apartment.lat && apartment.lon && (
+            <a
+              className="map-link"
+              href={`https://www.google.com/maps?q=${apartment.lat},${apartment.lon}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              פתח מיקום במפה
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
