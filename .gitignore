@@ -11,3 +11,10 @@ __pycache__/
 node_modules/
 dist/
 build/
+# Playwright browser profile
+backend/app/browser/yad2_user_data/
+backend/app/browser/**/Cache/
+backend/app/browser/**/Code Cache/
+backend/app/browser/**/GPUCache/
+backend/app/browser/**/*.sqlite
+backend/app/browser/**/*.log
