@@ -80,7 +80,6 @@ class PlaywrightDetailsService:
             context_kwargs["storage_state"] = str(self.state_file)
 
         self.user_context = await self.user_browser.new_context(**context_kwargs)
-
         return self.user_context
 
     async def _reset_user_browser(self) -> None:
@@ -110,6 +109,7 @@ class PlaywrightDetailsService:
             self,
             apartments: list[Apartment],
             must_have: list[str] | None = None,
+            progress_callback=None,
     ) -> list[Apartment]:
         if not apartments:
             return []
@@ -134,6 +134,7 @@ class PlaywrightDetailsService:
                 slow_mo=self.slow_mo,
                 args=[
                     "--disable-blink-features=AutomationControlled",
+                    "--start-minimized",
                 ],
             )
 
@@ -149,10 +150,28 @@ class PlaywrightDetailsService:
             context = await browser.new_context(**context_kwargs)
 
             all_enriched: list[Apartment] = []
+            total_batches = (len(limited) + batch_size - 1) // batch_size
 
             for start in range(0, len(limited), batch_size):
-                batch = limited[start: start + batch_size]
+                batch = limited[start : start + batch_size]
                 batch_number = (start // batch_size) + 1
+                total_batches = (len(limited) + batch_size - 1) // batch_size
+
+                if progress_callback:
+                    batch_progress = 40 + int((batch_number - 1) / max(total_batches, 1) * 55)
+                    await progress_callback(
+                        batch_progress,
+                        f"מעשיר מודעות batch {batch_number}/{total_batches}",
+                    )
+
+                if progress_callback:
+                    batch_progress = 40 + int(
+                        (batch_number - 1) / max(total_batches, 1) * 55
+                    )
+                    await progress_callback(
+                        batch_progress,
+                        f"מעשיר מודעות batch {batch_number}/{total_batches}",
+                    )
 
                 print(
                     f"Enriching batch {batch_number}: "
@@ -178,6 +197,13 @@ class PlaywrightDetailsService:
                         all_enriched.append(item)
 
                 await self._save_state(context)
+
+                if progress_callback:
+                    batch_progress = 40 + int(batch_number / max(total_batches, 1) * 55)
+                    await progress_callback(
+                        batch_progress,
+                        f"הסתיים batch {batch_number}/{total_batches}",
+                    )
 
                 if start + batch_size < len(limited) and batch_delay > 0:
                     await asyncio.sleep(batch_delay)
@@ -227,18 +253,70 @@ class PlaywrightDetailsService:
             return self.cache[apartment.token]
 
         page = None
+        url = self._build_url(apartment)
 
         try:
             page = await context.new_page()
-            await page.goto(self._build_url(apartment), wait_until="domcontentloaded", timeout=60_000)
-            await page.wait_for_timeout(3_000)
+
+            if not self.headless:
+                await self._minimize_window(page)
+
+            await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+
+            try:
+                await page.wait_for_selector("text=הצגת מספר טלפון", timeout=10_000)
+            except Exception:
+                try:
+                    await page.wait_for_selector("text=פרטים נוספים", timeout=5_000)
+                except Exception:
+                    pass
+
+            await page.wait_for_timeout(1_500)
 
             html_text = await page.content()
             page_text = await page.inner_text("body")
 
-            if self._is_captcha(html_text, page_text):
-                print(f"CAPTCHA detected on token={apartment.token}. Skipping enrichment.")
-                return apartment
+            if self._is_valid_yad2_listing(page_text):
+                pass
+
+            elif self._is_captcha(html_text, page_text):
+                print(
+                    f"CAPTCHA detected on token={apartment.token}. "
+                    "Opening visible browser..."
+                )
+
+                await page.close()
+                page = None
+
+                solved = await self._open_visible_browser_for_captcha(url)
+
+                if not solved:
+                    print(f"CAPTCHA was not solved for token={apartment.token}. Skipping.")
+                    return apartment
+
+                page = await context.new_page()
+
+                if not self.headless:
+                    await self._minimize_window(page)
+
+                await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+
+                try:
+                    await page.wait_for_selector("text=הצגת מספר טלפון", timeout=8_000)
+                except Exception:
+                    pass
+
+                await page.wait_for_timeout(2_000)
+
+                html_text = await page.content()
+                page_text = await page.inner_text("body")
+
+                if not self._is_valid_yad2_listing(page_text) and self._is_captcha(
+                    html_text,
+                    page_text,
+                ):
+                    print(f"Still CAPTCHA after manual solve token={apartment.token}. Skipping.")
+                    return apartment
 
             item_data = self._extract_next_data(html_text, apartment.token)
 
@@ -266,33 +344,135 @@ class PlaywrightDetailsService:
                 except Exception:
                     pass
 
+    async def _open_visible_browser_for_captcha(self, url: str) -> bool:
+        playwright = await async_playwright().start()
+        browser: Browser | None = None
+        context: BrowserContext | None = None
+
+        try:
+            browser = await playwright.chromium.launch(
+                headless=False,
+                slow_mo=80,
+                args=[
+                    "--start-maximized",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
+
+            context_kwargs: dict[str, Any] = {
+                "locale": "he-IL",
+                "timezone_id": "Asia/Jerusalem",
+                "viewport": {"width": 1400, "height": 900},
+            }
+
+            if self.state_file.exists():
+                context_kwargs["storage_state"] = str(self.state_file)
+
+            context = await browser.new_context(**context_kwargs)
+            page = await context.new_page()
+
+            await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            await self._restore_window(page)
+
+            print("Solve CAPTCHA in the opened browser. Waiting up to 2 minutes...")
+            await page.wait_for_timeout(120_000)
+
+            html_text = await page.content()
+            page_text = await page.inner_text("body")
+
+            if self._is_captcha(html_text, page_text):
+                return False
+
+            await self._save_state(context)
+            return True
+
+        except Exception as e:
+            print(f"Manual CAPTCHA browser failed: {e}")
+            return False
+
+        finally:
+            try:
+                if context:
+                    await context.close()
+            except Exception:
+                pass
+
+            try:
+                if browser:
+                    await browser.close()
+            except Exception:
+                pass
+
+            try:
+                await playwright.stop()
+            except Exception:
+                pass
+
+    async def _minimize_window(self, page) -> None:
+        try:
+            session = await page.context.new_cdp_session(page)
+            window_info = await session.send("Browser.getWindowForTarget")
+            window_id = window_info["windowId"]
+
+            await session.send(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": window_id,
+                    "bounds": {"windowState": "minimized"},
+                },
+            )
+        except Exception as e:
+            print(f"Failed to minimize browser: {e}")
+
+    async def _restore_window(self, page) -> None:
+        try:
+            session = await page.context.new_cdp_session(page)
+            window_info = await session.send("Browser.getWindowForTarget")
+            window_id = window_info["windowId"]
+
+            await session.send(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": window_id,
+                    "bounds": {"windowState": "normal"},
+                },
+            )
+
+            await page.bring_to_front()
+        except Exception as e:
+            print(f"Failed to restore browser: {e}")
+
     async def _save_state(self, context: BrowserContext) -> None:
         try:
             await context.storage_state(path=str(self.state_file))
         except Exception:
             pass
 
-    def _is_captcha(self, html_text: str, page_text: str = "") -> bool:
-        combined = f"{html_text or ''}\n{page_text or ''}".lower()
+    def _is_valid_yad2_listing(self, page_text: str = "") -> bool:
+        text = page_text or ""
 
-        legit_indicators = [
-            "הצג מספר טלפון",
-            "שליחת הודעה",
-            "חדרים",
-            "מ״ר",
-            "מקל בניין",
+        required_groups = [
+            ["הצגת מספר טלפון", "הצג מספר טלפון"],
+            ["שליחת הודעה", "השארת פרטים", "Whatsapp"],
+            ["פרטים נוספים", "מה יש בנכס", "מ״ר", "חדרים"],
         ]
 
-        if any(x in combined for x in legit_indicators):
+        return all(any(option in text for option in group) for group in required_groups)
+
+    def _is_captcha(self, html_text: str, page_text: str = "") -> bool:
+        if self._is_valid_yad2_listing(page_text):
             return False
 
-        captcha_indicators = [
+        combined = f"{html_text or ''}\n{page_text or ''}".lower()
+
+        hard_captcha_indicators = [
             "shieldsquare captcha",
-            "validate.perfdrive.com",
             "why am i seeing this page",
+            "validate.perfdrive.com/ca",
+            "access denied",
         ]
 
-        return any(x in combined for x in captcha_indicators)
+        return any(indicator in combined for indicator in hard_captcha_indicators)
 
     def _build_url(self, apartment: Apartment) -> str:
         return apartment.yad2_url or f"https://www.yad2.co.il/realestate/item/{apartment.token}"
@@ -386,7 +566,11 @@ class PlaywrightDetailsService:
                     if stop in after:
                         after = after.split(stop, 1)[0].strip()
 
-                cleaned = "\n".join(line.strip() for line in after.splitlines() if line.strip())
+                cleaned = "\n".join(
+                    line.strip()
+                    for line in after.splitlines()
+                    if line.strip()
+                )
 
                 if len(cleaned) >= 20:
                     return cleaned[:1200]

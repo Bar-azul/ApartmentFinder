@@ -22,12 +22,23 @@ class Yad2Client:
         self.map_endpoint = "/realestate-feed/rent/map"
         self.details_service = PlaywrightDetailsService()
 
-    async def search_rentals(self, filters: SearchFilters) -> list[Apartment]:
+    async def search_rentals(
+            self,
+            filters: SearchFilters,
+            progress_callback=None,
+    ) -> list[Apartment]:
+        if progress_callback:
+            await progress_callback(18, "שולח בקשה ל־Yad2 Map API...")
+
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             map_params = self._build_map_params(filters)
             map_data = await self._get_json(client, self.map_endpoint, map_params)
 
         markers = map_data.get("data", {}).get("markers", [])
+
+        if progress_callback:
+            await progress_callback(28, f"נמצאו {len(markers)} מודעות ראשוניות")
+
         apartments = [self._normalize_marker(marker) for marker in markers]
 
         apartments = self._post_filter(
@@ -36,18 +47,22 @@ class Yad2Client:
             include_feature_filter=False,
         )
 
+        if progress_callback:
+            await progress_callback(35, f"לאחר סינון בסיסי נשארו {len(apartments)} מודעות")
+
         should_enrich = (
-            settings.playwright_enabled
-            and (
-                settings.playwright_enrich_on_search
-                or bool(filters.must_have)
-            )
+                settings.playwright_enabled
+                and (
+                        settings.playwright_enrich_on_search
+                        or bool(filters.must_have)
+                )
         )
 
         if should_enrich:
             apartments = await self.details_service.enrich_many(
                 apartments=apartments,
                 must_have=filters.must_have,
+                progress_callback=progress_callback,
             )
 
             apartments = self._post_filter(
@@ -55,6 +70,9 @@ class Yad2Client:
                 filters=filters,
                 include_feature_filter=bool(filters.must_have),
             )
+
+        if progress_callback:
+            await progress_callback(98, "מסיים ומחזיר תוצאות...")
 
         return apartments
 

@@ -7,6 +7,7 @@ from app.models.apartment import Apartment
 from app.models.search_filters import DirectSearchRequest, PromptSearchRequest
 from app.services.llm_filter_parser import LLMFilterParser
 from app.services.playwright_details_service import PlaywrightDetailsService
+from app.services.search_progress_store import progress_store
 from app.services.yad2_client import Yad2Client
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,71 @@ router = APIRouter(prefix="/api/search", tags=["Search"])
 yad2_client = Yad2Client()
 llm_parser = LLMFilterParser()
 details_service = PlaywrightDetailsService()
+
+
+@router.post("/start")
+async def start_search(request: PromptSearchRequest):
+    job_id = progress_store.create_job()
+
+    asyncio.create_task(_run_search_job(job_id, request.prompt))
+
+    return {
+        "success": True,
+        "job_id": job_id,
+    }
+
+
+@router.get("/progress/{job_id}")
+async def get_search_progress(job_id: str):
+    job = progress_store.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return job
+
+
+async def _run_search_job(job_id: str, prompt: str):
+    try:
+        progress_store.update(job_id, 5, "מנתח את הבקשה שלך...")
+
+        filters = llm_parser.parse(prompt)
+
+        progress_store.update(job_id, 15, "מחפש מודעות ב־Yad2 Map API...")
+
+        async def progress_callback(progress: int, status: str):
+            progress_store.update(job_id, progress, status)
+
+        apartments = await yad2_client.search_rentals(
+            filters=filters,
+            progress_callback=progress_callback,
+        )
+
+        result = {
+            "success": True,
+            "filters": filters.model_dump(),
+            "count": len(apartments),
+            "apartments": [apartment.model_dump() for apartment in apartments],
+        }
+
+        progress_store.update(
+            job_id,
+            100,
+            "החיפוש הסתיים בהצלחה",
+            result=result,
+            done=True,
+            success=True,
+        )
+
+    except Exception as e:
+        progress_store.update(
+            job_id,
+            100,
+            "שגיאה במהלך החיפוש",
+            error=str(e),
+            done=True,
+            success=False,
+        )
 
 
 @router.post("/prompt")

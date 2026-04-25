@@ -30,44 +30,68 @@ function App() {
   const [error, setError] = useState("");
 
   async function handleSearch() {
-    setLoading(true);
-    setProgress(0);
-    setError("");
-    setApartments([]);
-    setFilters(null);
-    setSelectedApartment(null);
-    setExpandedImage(null);
+  setLoading(true);
+  setProgress(0);
+  setError("");
+  setApartments([]);
+  setFilters(null);
+  setSelectedApartment(null);
+  setExpandedImage(null);
 
-    const progressTimer = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 95) return prev;
-        const next = prev + Math.floor(Math.random() * 6) + 2;
-        return next > 95 ? 95 : next;
-      });
-    }, 700);
+  let pollTimer = null;
 
-    try {
-      const response = await axios.post(`${API_BASE_URL}/api/search/prompt`, {
-        prompt,
-      });
+  try {
+    const startResponse = await axios.post(`${API_BASE_URL}/api/search/start`, {
+      prompt,
+    });
 
-      setProgress(100);
+    const jobId = startResponse.data.job_id;
 
-      setTimeout(() => {
-        setApartments(response.data.apartments || []);
-        setFilters(response.data.filters || null);
-      }, 300);
-    } catch (err) {
-      setError(err.response?.data?.detail || err.message || "שגיאה בחיפוש");
-    } finally {
-      clearInterval(progressTimer);
+    pollTimer = setInterval(async () => {
+      try {
+        const progressResponse = await axios.get(
+          `${API_BASE_URL}/api/search/progress/${jobId}`
+        );
 
-      setTimeout(() => {
+        const job = progressResponse.data;
+
+        setProgress(job.progress || 0);
+
+        if (job.status) {
+          console.log("Search status:", job.status);
+        }
+
+        if (job.done) {
+          clearInterval(pollTimer);
+
+          if (job.success && job.result) {
+            setProgress(100);
+            setApartments(job.result.apartments || []);
+            setFilters(job.result.filters || null);
+          } else {
+            setError(job.error || "שגיאה בחיפוש");
+          }
+
+          setTimeout(() => {
+            setLoading(false);
+            setProgress(0);
+          }, 700);
+        }
+      } catch (err) {
+        clearInterval(pollTimer);
+        setError(err.message || "שגיאה בבדיקת התקדמות");
         setLoading(false);
         setProgress(0);
-      }, 800);
-    }
+      }
+    }, 800);
+  } catch (err) {
+    if (pollTimer) clearInterval(pollTimer);
+
+    setError(err.response?.data?.detail || err.message || "שגיאה בהתחלת החיפוש");
+    setLoading(false);
+    setProgress(0);
   }
+}
 
   async function handleOpenInYad2(apartment) {
     try {
