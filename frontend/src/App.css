@@ -517,3 +517,171 @@ a {
   font-size: 12px;
   line-height: 1.4;
 }
+
+@media (max-width: 768px) {
+  .page {
+    padding: 18px 12px;
+  }
+
+  .hero h1 {
+    font-size: 30px;
+  }
+
+  .hero p {
+    font-size: 14px;
+  }
+
+  .search-box,
+  .feature-legend,
+  .search-progress,
+  .filters-box {
+    border-radius: 16px;
+    padding: 14px;
+  }
+
+  textarea {
+    min-height: 95px;
+    font-size: 15px;
+  }
+
+  button {
+    width: 100%;
+    font-size: 15px;
+    padding: 12px 16px;
+  }
+
+  .feature-legend-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .feature-legend-title p {
+    font-size: 13px;
+  }
+
+  .results-header {
+    margin-top: 22px;
+    align-items: flex-start;
+    gap: 6px;
+    flex-direction: column;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .card {
+    border-radius: 16px;
+  }
+
+  .card img {
+    height: 210px;
+  }
+
+  .card-content {
+    padding: 14px;
+  }
+
+  .price {
+    font-size: 22px;
+  }
+
+  .features-row {
+    gap: 6px;
+  }
+
+  .feature-badge {
+    font-size: 12px;
+    padding: 5px 9px;
+  }
+
+  .filters-box {
+    direction: ltr;
+    max-width: 100%;
+  }
+
+  .filters-box pre {
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .progress-steps {
+    font-size: 11px;
+  }
+
+  .modal-backdrop {
+    padding: 8px;
+    align-items: stretch;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: 96vh;
+    border-radius: 18px;
+  }
+
+  .modal-gallery {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .modal-gallery img {
+    height: 230px;
+  }
+
+  .modal-content {
+    padding: 0 14px 22px;
+  }
+
+  .modal-content h2 {
+    font-size: 28px;
+  }
+
+  .modal-content h3 {
+    font-size: 17px;
+    line-height: 1.5;
+  }
+
+  .modal-details-grid {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .modal-actions {
+    flex-direction: column;
+  }
+
+  .map-link,
+  .open-yad2-button {
+    width: 100%;
+    text-align: center;
+  }
+
+  .lightbox-close {
+    top: 12px;
+    left: 12px;
+  }
+
+  .image-lightbox {
+    padding: 14px;
+  }
+}
+
+@media (max-width: 420px) {
+  .feature-legend-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .card img {
+    height: 185px;
+  }
+
+  .meta {
+    gap: 6px;
+  }
+
+  .meta span {
+    font-size: 12px;
+  }
+}
