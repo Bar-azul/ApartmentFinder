@@ -6,6 +6,19 @@ const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
 ).replace(/\/$/, "");
 
+const FILTERABLE_FEATURES = [
+  { key: "mamad", label: "ממ״ד", example: "עם ממד / ממ״ד" },
+  { key: "elevator", label: "מעלית", example: "עם מעלית" },
+  { key: "parking", label: "חניה", example: "עם חניה / חנייה" },
+  { key: "balcony", label: "מרפסת", example: "עם מרפסת" },
+  { key: "furniture", label: "ריהוט", example: "מרוהטת / עם ריהוט" },
+  { key: "pets_allowed", label: "בעלי חיים", example: "עם בעלי חיים / כלב / חתול" },
+  { key: "air_conditioner", label: "מיזוג", example: "עם מזגן / מיזוג" },
+  { key: "renovated", label: "משופצת", example: "דירה משופצת" },
+  { key: "immediate_entrance", label: "כניסה מיידית", example: "כניסה מיידית" },
+  { key: "building_shelter", label: "מקלט", example: "עם מקלט" },
+];
+
 function formatPrice(price) {
   if (price === null || price === undefined || price === "") return "מחיר לא צוין";
 
@@ -27,7 +40,7 @@ function getYad2Url(apartment) {
 
 function App() {
   const [prompt, setPrompt] = useState(
-    "חפש לי דירה בהרצליה, פתח תקווה, קרית אונו, רעננה, כפר סבא ממד מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
+    "חפש לי דירה בראשון לציון עם מרפסת מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
   );
 
   const [apartments, setApartments] = useState([]);
@@ -122,6 +135,8 @@ function App() {
         </button>
       </section>
 
+      <FeatureLegend />
+
       {loading && <SearchProgress progress={progress} />}
 
       {error && <div className="error">{error}</div>}
@@ -174,6 +189,26 @@ function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function FeatureLegend() {
+  return (
+    <section className="feature-legend">
+      <div className="feature-legend-title">
+        <h3>מאפיינים שניתן לסנן לפיהם</h3>
+        <p>אפשר לכתוב אותם ישירות בפרומפט, למשל: “עם מרפסת”, “עם בעלי חיים”, “עם ריהוט”.</p>
+      </div>
+
+      <div className="feature-legend-grid">
+        {FILTERABLE_FEATURES.map((feature) => (
+          <div className="feature-legend-item" key={feature.key}>
+            <span className="feature-legend-badge">{feature.label}</span>
+            <small>{feature.example}</small>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -324,18 +359,7 @@ function ApartmentModal({ apartment, onClose, onImageOpen, onOpenInYad2 }) {
 function FeatureBadges({ features, compact = false }) {
   if (!features) return null;
 
-  const items = [
-    { key: "mamad", label: "ממ״ד" },
-    { key: "elevator", label: "מעלית" },
-    { key: "parking", label: "חניה" },
-    { key: "air_conditioner", label: "מיזוג" },
-    { key: "balcony", label: "מרפסת" },
-    { key: "furniture", label: "ריהוט" },
-    { key: "renovated", label: "משופצת" },
-    { key: "pets_allowed", label: "בעלי חיים" },
-  ];
-
-  const active = items.filter((item) => features[item.key]);
+  const active = FILTERABLE_FEATURES.filter((item) => features[item.key]);
 
   if (!active.length) {
     return compact ? null : (

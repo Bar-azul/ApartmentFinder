@@ -214,14 +214,13 @@ class Yad2Client:
             if "ground_floor" in filters.exclude and apartment.floor == 0:
                 continue
 
-            if include_feature_filter:
-                if "mamad" in filters.must_have and not apartment.features.mamad:
-                    continue
+            if include_feature_filter and filters.must_have:
+                matches_all_features = all(
+                    getattr(apartment.features, feature_name, False)
+                    for feature_name in filters.must_have
+                )
 
-                if "elevator" in filters.must_have and not apartment.features.elevator:
-                    continue
-
-                if "parking" in filters.must_have and not apartment.features.parking:
+                if not matches_all_features:
                     continue
 
             result.append(apartment)

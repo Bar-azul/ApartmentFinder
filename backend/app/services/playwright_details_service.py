@@ -478,17 +478,13 @@ class PlaywrightDetailsService:
         return apartment.yad2_url or f"https://www.yad2.co.il/realestate/item/{apartment.token}"
 
     def _matches_must_have(self, apartment: Apartment, must_have: list[str]) -> bool:
-        features = apartment.features
+        if not must_have:
+            return True
 
-        for item in must_have:
-            if item == "mamad" and not features.mamad:
-                return False
-            if item == "elevator" and not features.elevator:
-                return False
-            if item == "parking" and not features.parking:
-                return False
-
-        return True
+        return all(
+            getattr(apartment.features, feature_name, False)
+            for feature_name in must_have
+        )
 
     def _extract_next_data(self, html_text: str, token: str) -> dict[str, Any] | None:
         soup = BeautifulSoup(html_text, "html.parser")
