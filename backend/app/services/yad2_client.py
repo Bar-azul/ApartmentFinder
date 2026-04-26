@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 import httpx
@@ -8,10 +9,12 @@ from app.config import settings
 from app.models.apartment import Apartment
 from app.models.search_filters import SearchFilters
 from app.services.playwright_details_service import PlaywrightDetailsService
+from app.services.yad2_location_resolver import Yad2LocationResolver
 
 
 REGION_SLUG_BY_ID = {
     1: "center-and-sharon",
+    2: "south",
 }
 
 
@@ -21,25 +24,42 @@ class Yad2Client:
         self.www_base_url = "https://www.yad2.co.il"
         self.map_endpoint = "/realestate-feed/rent/map"
         self.details_service = PlaywrightDetailsService()
+        self.location_resolver = Yad2LocationResolver()
 
     async def search_rentals(
-            self,
-            filters: SearchFilters,
-            progress_callback=None,
+        self,
+        filters: SearchFilters,
+        progress_callback=None,
     ) -> list[Apartment]:
         if progress_callback:
-            await progress_callback(18, "שולח בקשה ל־Yad2 Map API...")
+            await progress_callback(18, "מתרגם מיקום לאזור חיפוש...")
+
+        filters = self.location_resolver.apply_location_filters(filters)
+
+        if progress_callback:
+            await progress_callback(20, "שולח בקשה ל־Yad2 Map API...")
 
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             map_params = self._build_map_params(filters)
+            print("YAD2 MAP PARAMS:", map_params)
+
             map_data = await self._get_json(client, self.map_endpoint, map_params)
 
-        markers = map_data.get("data", {}).get("markers", [])
+        data = map_data.get("data", {})
+        markers = data.get("markers", []) or []
+
+        print("YAD2 MARKERS:", len(markers))
+        print("YAD2 CLUSTERS:", len(data.get("clusters", []) or []))
+        print("YAD2 DATA KEYS:", list(data.keys()))
 
         if progress_callback:
             await progress_callback(28, f"נמצאו {len(markers)} מודעות ראשוניות")
 
         apartments = [self._normalize_marker(marker) for marker in markers]
+
+        print("TOTAL APARTMENTS FROM MARKERS:", len(apartments))
+        print("CITIES COUNT BEFORE FILTER:", Counter(a.city for a in apartments))
+        print("ALLOWED CITY FILTERS:", filters.city_texts, filters.city_text)
 
         apartments = self._post_filter(
             apartments=apartments,
@@ -47,15 +67,18 @@ class Yad2Client:
             include_feature_filter=False,
         )
 
+        print("TOTAL APARTMENTS AFTER BASIC FILTER:", len(apartments))
+        print("CITIES COUNT AFTER BASIC FILTER:", Counter(a.city for a in apartments))
+
         if progress_callback:
             await progress_callback(35, f"לאחר סינון בסיסי נשארו {len(apartments)} מודעות")
 
         should_enrich = (
-                settings.playwright_enabled
-                and (
-                        settings.playwright_enrich_on_search
-                        or bool(filters.must_have)
-                )
+            settings.playwright_enabled
+            and (
+                settings.playwright_enrich_on_search
+                or bool(filters.must_have)
+            )
         )
 
         if should_enrich:
@@ -65,11 +88,17 @@ class Yad2Client:
                 progress_callback=progress_callback,
             )
 
+            print("TOTAL APARTMENTS AFTER ENRICH:", len(apartments))
+            print("CITIES COUNT AFTER ENRICH:", Counter(a.city for a in apartments))
+
             apartments = self._post_filter(
                 apartments=apartments,
                 filters=filters,
                 include_feature_filter=bool(filters.must_have),
             )
+
+            print("TOTAL APARTMENTS AFTER FEATURE FILTER:", len(apartments))
+            print("CITIES COUNT AFTER FEATURE FILTER:", Counter(a.city for a in apartments))
 
         if progress_callback:
             await progress_callback(98, "מסיים ומחזיר תוצאות...")
@@ -113,6 +142,9 @@ class Yad2Client:
             "maxRooms",
             "must_have",
             "exclude",
+            "multiCity",
+            "multiArea",
+            "multiNeighborhood",
         }
 
         for key, value in filters.model_dump(exclude_none=True).items():
@@ -182,17 +214,23 @@ class Yad2Client:
     ) -> list[Apartment]:
         result: list[Apartment] = []
 
-        allowed_cities = set(filters.city_texts or [])
+        allowed_cities = {
+            self._normalize_hebrew_text(city)
+            for city in (filters.city_texts or [])
+            if city
+        }
 
         if filters.city_text:
-            allowed_cities.add(filters.city_text)
+            allowed_cities.add(self._normalize_hebrew_text(filters.city_text))
 
         for apartment in apartments:
             if apartment.property_type in {"חניה", "מחסן"}:
                 continue
 
             if allowed_cities:
-                if not apartment.city or apartment.city not in allowed_cities:
+                apartment_city = self._normalize_hebrew_text(apartment.city or "")
+
+                if apartment_city not in allowed_cities:
                     continue
 
             if filters.minPrice is not None and apartment.price is not None:
@@ -226,3 +264,12 @@ class Yad2Client:
             result.append(apartment)
 
         return result
+
+    def _normalize_hebrew_text(self, value: str) -> str:
+        value = (value or "").strip()
+        value = value.replace("״", '"').replace("׳", "'")
+        value = value.replace("פתח תקוה", "פתח תקווה")
+        value = value.replace("קריית אונו", "קרית אונו")
+        value = value.replace("תל-אביב", "תל אביב")
+        value = value.replace("זיכרון יעקב", "זכרון יעקב")
+        return value

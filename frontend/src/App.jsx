@@ -21,10 +21,8 @@ const FILTERABLE_FEATURES = [
 
 function formatPrice(price) {
   if (price === null || price === undefined || price === "") return "מחיר לא צוין";
-
   const numericPrice = Number(price);
   if (Number.isNaN(numericPrice)) return "מחיר לא צוין";
-
   return `₪ ${numericPrice.toLocaleString("he-IL")}`;
 }
 
@@ -43,8 +41,11 @@ function App() {
     "חפש לי דירה בראשון לציון עם מרפסת מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
   );
 
+  const [selectedMustHave, setSelectedMustHave] = useState([]);
   const [apartments, setApartments] = useState([]);
   const [filters, setFilters] = useState(null);
+  const [showFilters, setShowFilters] = useState(false);
+
   const [selectedApartment, setSelectedApartment] = useState(null);
   const [expandedImage, setExpandedImage] = useState(null);
 
@@ -52,12 +53,25 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
 
+  function toggleMustHave(featureKey) {
+    setSelectedMustHave((prev) =>
+      prev.includes(featureKey)
+        ? prev.filter((key) => key !== featureKey)
+        : [...prev, featureKey]
+    );
+  }
+
+  function clearMustHave() {
+    setSelectedMustHave([]);
+  }
+
   async function handleSearch() {
     setLoading(true);
     setProgress(0);
     setError("");
     setApartments([]);
     setFilters(null);
+    setShowFilters(false);
     setSelectedApartment(null);
     setExpandedImage(null);
 
@@ -66,6 +80,7 @@ function App() {
     try {
       const startResponse = await axios.post(`${API_BASE_URL}/api/search/start`, {
         prompt,
+        must_have: selectedMustHave,
       });
 
       const jobId = startResponse.data.job_id;
@@ -135,16 +150,35 @@ function App() {
         </button>
       </section>
 
-      <FeatureLegend />
+      <FeatureLegend
+        selectedMustHave={selectedMustHave}
+        onToggle={toggleMustHave}
+        onClear={clearMustHave}
+      />
 
       {loading && <SearchProgress progress={progress} />}
 
       {error && <div className="error">{error}</div>}
 
       {filters && (
-        <section className="filters-box">
-          <h3>פילטרים שהמערכת הבינה</h3>
-          <pre>{JSON.stringify(filters, null, 2)}</pre>
+        <section className="filters-toggle-box">
+          <button
+            type="button"
+            className="filters-toggle-button"
+            onClick={() => setShowFilters((prev) => !prev)}
+          >
+            {showFilters
+              ? "הסתר פילטרים שהמערכת הבינה"
+              : "הצג פילטרים שהמערכת הבינה"}
+            <span>{showFilters ? "▲" : "▼"}</span>
+          </button>
+
+          {showFilters && (
+            <div className="filters-box">
+              <h3>פילטרים שהמערכת הבינה</h3>
+              <pre>{JSON.stringify(filters, null, 2)}</pre>
+            </div>
+          )}
         </section>
       )}
 
@@ -192,21 +226,38 @@ function App() {
   );
 }
 
-function FeatureLegend() {
+function FeatureLegend({ selectedMustHave, onToggle, onClear }) {
   return (
     <section className="feature-legend">
       <div className="feature-legend-title">
         <h3>מאפיינים שניתן לסנן לפיהם</h3>
-        <p>אפשר לכתוב אותם ישירות בפרומפט, למשל: “עם מרפסת”, “עם בעלי חיים”, “עם ריהוט”.</p>
+        <p>אפשר לכתוב אותם בפרומפט או פשוט ללחוץ על הכרטיסיות כאן ולסמן.</p>
+
+        {!!selectedMustHave.length && (
+          <button className="clear-features-button" onClick={onClear}>
+            נקה סימונים
+          </button>
+        )}
       </div>
 
       <div className="feature-legend-grid">
-        {FILTERABLE_FEATURES.map((feature) => (
-          <div className="feature-legend-item" key={feature.key}>
-            <span className="feature-legend-badge">{feature.label}</span>
-            <small>{feature.example}</small>
-          </div>
-        ))}
+        {FILTERABLE_FEATURES.map((feature) => {
+          const selected = selectedMustHave.includes(feature.key);
+
+          return (
+            <button
+              type="button"
+              className={`feature-legend-item ${selected ? "selected" : ""}`}
+              key={feature.key}
+              onClick={() => onToggle(feature.key)}
+              aria-pressed={selected}
+            >
+              <span className="feature-legend-badge">{feature.label}</span>
+              <small>{feature.example}</small>
+              {selected && <span className="selected-mark">✓ מסומן</span>}
+            </button>
+          );
+        })}
       </div>
     </section>
   );
@@ -331,7 +382,6 @@ function ApartmentModal({ apartment, onClose, onImageOpen, onOpenInYad2 }) {
             </p>
             <p><strong>קומה:</strong> {apartment.floor ?? "-"}</p>
             <p><strong>מספר מודעה:</strong> {apartment.order_id || "-"}</p>
-            <p><strong>Token:</strong> {apartment.token || "-"}</p>
           </div>
 
           <div className="modal-actions">

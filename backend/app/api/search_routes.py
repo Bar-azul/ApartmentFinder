@@ -23,7 +23,13 @@ details_service = PlaywrightDetailsService()
 async def start_search(request: PromptSearchRequest):
     job_id = progress_store.create_job()
 
-    asyncio.create_task(_run_search_job(job_id, request.prompt))
+    asyncio.create_task(
+        _run_search_job(
+            job_id=job_id,
+            prompt=request.prompt,
+            selected_must_have=request.must_have or [],
+        )
+    )
 
     return {
         "success": True,
@@ -41,11 +47,18 @@ async def get_search_progress(job_id: str):
     return job
 
 
-async def _run_search_job(job_id: str, prompt: str):
+async def _run_search_job(
+    job_id: str,
+    prompt: str,
+    selected_must_have: list[str] | None = None,
+):
     try:
         progress_store.update(job_id, 5, "מנתח את הבקשה שלך...")
 
-        filters = llm_parser.parse(prompt)
+        filters = llm_parser.parse(
+            prompt=prompt,
+            selected_must_have=selected_must_have or [],
+        )
 
         progress_store.update(job_id, 15, "מחפש מודעות ב־Yad2 Map API...")
 
@@ -74,6 +87,8 @@ async def _run_search_job(job_id: str, prompt: str):
         )
 
     except Exception as e:
+        logger.exception("Search job failed: %s", e)
+
         progress_store.update(
             job_id,
             100,
@@ -87,7 +102,11 @@ async def _run_search_job(job_id: str, prompt: str):
 @router.post("/prompt")
 async def search_by_prompt(request: PromptSearchRequest):
     try:
-        filters = llm_parser.parse(request.prompt)
+        filters = llm_parser.parse(
+            prompt=request.prompt,
+            selected_must_have=request.must_have or [],
+        )
+
         apartments = await yad2_client.search_rentals(filters)
 
         return {
@@ -98,6 +117,7 @@ async def search_by_prompt(request: PromptSearchRequest):
         }
 
     except Exception as e:
+        logger.exception("Prompt search failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -114,6 +134,7 @@ async def search_direct(request: DirectSearchRequest):
         }
 
     except Exception as e:
+        logger.exception("Direct search failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -128,6 +149,8 @@ async def get_apartment_details(apartment: Apartment):
         }
 
     except Exception as e:
+        logger.exception("Details enrichment failed: %s", e)
+
         apartment.description = f"שגיאה בשליפת פרטים מלאים: {str(e)}"
 
         return {

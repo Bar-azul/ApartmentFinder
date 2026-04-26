@@ -19,7 +19,7 @@ class LLMFilterParser:
             else None
         )
 
-    def parse(self, prompt: str) -> SearchFilters:
+    def parse(self, prompt: str, selected_must_have: list[str] | None = None) -> SearchFilters:
         if not self.client:
             filters = self._fallback_parse(prompt)
         else:
@@ -27,6 +27,7 @@ class LLMFilterParser:
 
         filters.raw_prompt = prompt
         filters = self._post_process_prompt_rules(filters, prompt)
+        self._merge_selected_must_have(filters, selected_must_have)
         self._apply_default_map_scope(filters)
 
         return filters
@@ -34,7 +35,6 @@ class LLMFilterParser:
     def _parse_with_llm(self, prompt: str) -> SearchFilters:
         system_prompt = """
 אתה ממיר בקשת חיפוש דירה בעברית ל-JSON בלבד.
-
 החזר רק JSON תקין ללא markdown.
 
 השדות:
@@ -56,40 +56,24 @@ class LLMFilterParser:
 חוקים לערים:
 - תזהה כל עיר/ישוב/מועצה שהמשתמש כתב.
 - אל תמציא עיר.
-- אם יש עיר אחת: החזר אותה גם ב-city_text וגם בתוך city_texts.
+- אם יש עיר אחת: city_text וגם city_texts.
 - אם יש כמה ערים: city_text=null ו-city_texts עם כולן.
-- שמור את שם העיר בעברית בדיוק ככל האפשר.
-- דוגמאות: ראשון לציון, תל אביב, רמת גן, גבעתיים, חולון, בת ים, הרצליה, רעננה, כפר סבא, פתח תקווה.
+- חשוב במיוחד לזהות ערים מרובות מילים: ראש העין, ראשון לציון, תל אביב, זכרון יעקב, כפר סבא, פתח תקווה.
 
-חוקים למחירים:
-- "עד 5500" => maxPrice=5500
-- "מ-4000 עד 5500" => minPrice=4000, maxPrice=5500
-- "בין 4000 ל-5500" => minPrice=4000, maxPrice=5500
+must_have אפשריים:
+- ממד / ממ״ד / ממ"ד => mamad
+- מעלית => elevator
+- חניה / חנייה => parking
+- בעלי חיים / חיות מחמד / כלב / חתול => pets_allowed
+- מרפסת / בלקון => balcony
+- ריהוט / מרוהט / מרוהטת / רהיטים => furniture
+- מיזוג / מזגן / מזגנים => air_conditioner
+- משופצת / משופץ => renovated
+- כניסה מיידית / כניסה מידית => immediate_entrance
+- מקלט => building_shelter
 
-חוקים לחדרים:
-- "בין 2.5 ל-4 חדרים" => minRooms=2.5, maxRooms=4
-- "3 חדרים ומעלה" => minRooms=3
-- "עד 4 חדרים" => maxRooms=4
-
-must_have אפשריים בלבד:
-- ממד / ממ״ד / ממ"ד => "mamad"
-- מעלית => "elevator"
-- חניה / חנייה => "parking"
-- בעלי חיים / חיות מחמד / כלב / חתול / מאפשר בעלי חיים => "pets_allowed"
-- מרפסת / בלקון => "balcony"
-- ריהוט / מרוהט / מרוהטת / עם רהיטים => "furniture"
-- מיזוג / מזגן / מזגנים => "air_conditioner"
-- משופצת / משופץ => "renovated"
-- כניסה מיידית / כניסה מידית => "immediate_entrance"
-- מקלט => "building_shelter"
-
-exclude אפשריים:
-- לא קרקע / לא קומת קרקע => "ground_floor"
-
-חשוב:
-- אם המשתמש כותב "עם בעלי חיים" זה must_have=["pets_allowed"].
-- אם המשתמש כותב "עם מרפסת" זה must_have=["balcony"].
-- אם המשתמש כותב "עם ריהוט" זה must_have=["furniture"].
+exclude:
+- לא קרקע / לא קומת קרקע => ground_floor
 """
 
         try:
@@ -114,73 +98,62 @@ exclude אפשריים:
 
         cleaned = text.strip()
         cleaned = cleaned.replace("```json", "").replace("```", "").strip()
-
         return json.loads(cleaned)
 
     def _fallback_parse(self, prompt: str) -> SearchFilters:
-        filters = SearchFilters(raw_prompt=prompt)
-
-        city_patterns = [
-            r"בראשון לציון",
-            r"ראשון לציון",
-            r"בתל אביב",
-            r"תל אביב",
-            r"ברמת גן",
-            r"רמת גן",
-            r"בגבעתיים",
-            r"גבעתיים",
-            r"בחולון",
-            r"חולון",
-            r"בבת ים",
-            r"בת ים",
-            r"בהרצליה",
-            r"הרצליה",
-            r"בפתח תקווה",
-            r"פתח תקווה",
-            r"פתח תקוה",
-            r"בקרית אונו",
-            r"קרית אונו",
-            r"קריית אונו",
-            r"ברעננה",
-            r"רעננה",
-            r"בכפר סבא",
-            r"כפר סבא",
-            r"ברמת השרון",
-            r"רמת השרון",
-            r"בבני ברק",
-            r"בני ברק",
-            r"בנתניה",
-            r"נתניה",
-        ]
-
-        found_cities: list[str] = []
-
-        for pattern in city_patterns:
-            if re.search(pattern, prompt):
-                city = pattern.replace("ב", "", 1) if pattern.startswith("ב") else pattern
-                city = city.replace("פתח תקוה", "פתח תקווה")
-                city = city.replace("קריית אונו", "קרית אונו")
-                found_cities.append(city)
-
-        found_cities = list(dict.fromkeys(found_cities))
-
-        if found_cities:
-            filters.city_texts = found_cities
-            filters.city_text = found_cities[0] if len(found_cities) == 1 else None
-
-        return filters
+        return SearchFilters(raw_prompt=prompt)
 
     def _post_process_prompt_rules(self, filters: SearchFilters, prompt: str) -> SearchFilters:
         filters.must_have = filters.must_have or []
         filters.exclude = filters.exclude or []
 
         self._normalize_city_fields(filters)
+        self._extract_city_from_prompt_generic(filters, prompt)
+
+        self._normalize_city_fields(filters)
         self._apply_price_rules(filters, prompt)
         self._apply_room_rules(filters, prompt)
         self._apply_feature_rules(filters, prompt)
         self._apply_exclude_rules(filters, prompt)
+        self._normalize_must_have(filters)
 
         return filters
+
+    def _merge_selected_must_have(
+        self,
+        filters: SearchFilters,
+        selected_must_have: list[str] | None,
+    ) -> None:
+        filters.must_have = filters.must_have or []
+
+        if selected_must_have:
+            for feature in selected_must_have:
+                if feature and feature not in filters.must_have:
+                    filters.must_have.append(feature)
+
+        self._normalize_must_have(filters)
+
+    def _normalize_must_have(self, filters: SearchFilters) -> None:
+        allowed = {
+            "mamad",
+            "elevator",
+            "parking",
+            "pets_allowed",
+            "balcony",
+            "furniture",
+            "air_conditioner",
+            "renovated",
+            "immediate_entrance",
+            "building_shelter",
+        }
+
+        normalized = []
+
+        for item in filters.must_have or []:
+            if item in allowed and item not in normalized:
+                normalized.append(item)
+
+        filters.must_have = normalized
 
     def _normalize_city_fields(self, filters: SearchFilters) -> None:
         cities = filters.city_texts or []
@@ -188,26 +161,151 @@ exclude אפשריים:
         if filters.city_text and filters.city_text not in cities:
             cities.append(filters.city_text)
 
-        normalized = []
+        normalized: list[str] = []
 
         for city in cities:
-            if not city:
-                continue
-
-            clean = city.strip()
-            clean = clean.replace("פתח תקוה", "פתח תקווה")
-            clean = clean.replace("קריית אונו", "קרית אונו")
-            clean = clean.replace("תל-אביב", "תל אביב")
-            clean = clean.replace("ראשלצ", "ראשון לציון")
-            clean = clean.replace("ראשל״צ", "ראשון לציון")
-            clean = clean.replace('ראשל"צ', "ראשון לציון")
-
-            normalized.append(clean)
+            clean = self._clean_city_candidate(city)
+            if clean:
+                normalized.append(clean)
 
         normalized = list(dict.fromkeys(normalized))
 
         filters.city_texts = normalized
         filters.city_text = normalized[0] if len(normalized) == 1 else None
+
+    def _extract_city_from_prompt_generic(self, filters: SearchFilters, prompt: str) -> None:
+        text = prompt.strip()
+
+        known_multi_word_cities = [
+            "ראש העין",
+            "ראשון לציון",
+            "תל אביב",
+            "פתח תקווה",
+            "פתח תקוה",
+            "קרית אונו",
+            "קריית אונו",
+            "כפר סבא",
+            "רמת גן",
+            "אילת",
+            "רמת השרון",
+            "בני ברק",
+            "נס ציונה",
+            "זכרון יעקב",
+            "זיכרון יעקב",
+            "מזכרת בתיה",
+            "הוד השרון",
+            "אור יהודה",
+            "בית שמש",
+            "בית שאן",
+            "בית דגן",
+            "גני תקווה",
+            "גני תקוה",
+            "קרית גת",
+            "קריית גת",
+            "קרית מלאכי",
+            "קריית מלאכי",
+            "קרית שמונה",
+            "קריית שמונה",
+        ]
+
+        found: list[str] = []
+
+        for city in known_multi_word_cities:
+            if city in text:
+                normalized = self._clean_city_candidate(city)
+                if normalized:
+                    found.append(normalized)
+
+        patterns = [
+            r"(?:דירה|דירות|בית|בתים)\s+ב(.+?)(?:\s+עם|\s+בלי|\s+מ-|\s+עד|\s+בין|\s+\d|$)",
+            r"(?:חפש לי|תמצא לי|מצא לי|מחפש)\s+(?:דירה|דירות|בית|בתים)?\s*ב(.+?)(?:\s+עם|\s+בלי|\s+מ-|\s+עד|\s+בין|\s+\d|$)",
+        ]
+
+        for pattern in patterns:
+            for match in re.finditer(pattern, text):
+                chunk = match.group(1).strip()
+                parts = re.split(r"[,،/]|(?:\s+או\s+)", chunk)
+
+                for part in parts:
+                    city = self._clean_city_candidate(part)
+                    if city:
+                        found.append(city)
+
+        existing = filters.city_texts or []
+        cleaned_existing: list[str] = []
+
+        for city in existing:
+            if any(city != full_city and city in full_city for full_city in found):
+                continue
+
+            cleaned_existing.append(city)
+
+        merged = cleaned_existing + found
+        merged = list(dict.fromkeys(merged))
+
+        filters.city_texts = merged
+        filters.city_text = merged[0] if len(merged) == 1 else None
+
+    def _clean_city_candidate(self, value: str) -> str | None:
+        if not value:
+            return None
+
+        city = value.strip(" ,.-")
+        city = re.sub(r"\s+", " ", city)
+
+        city = city.replace("זיכרון יעקב", "זכרון יעקב")
+        city = city.replace("פתח תקוה", "פתח תקווה")
+        city = city.replace("קריית אונו", "קרית אונו")
+        city = city.replace("תל-אביב", "תל אביב")
+        city = city.replace("ראשלצ", "ראשון לציון")
+        city = city.replace("ראשל״צ", "ראשון לציון")
+        city = city.replace('ראשל"צ', "ראשון לציון")
+        city = city.replace("גני תקוה", "גני תקווה")
+        city = city.replace("קריית גת", "קרית גת")
+        city = city.replace("קריית מלאכי", "קרית מלאכי")
+        city = city.replace("קריית שמונה", "קרית שמונה")
+
+        stop_words = {
+            "חפש",
+            "תמצא",
+            "מצא",
+            "לי",
+            "דירה",
+            "דירות",
+            "בית",
+            "בתים",
+            "להשכרה",
+            "השכרה",
+            "עם",
+            "בלי",
+            "עד",
+            "בין",
+            "מ",
+            "שקל",
+            "חדר",
+            "חדרים",
+            "ממד",
+            "ממ״ד",
+            'ממ"ד',
+            "מעלית",
+            "חניה",
+            "חנייה",
+            "מרפסת",
+            "ריהוט",
+            "בעלי",
+            "חיים",
+        }
+
+        words = [word for word in city.split() if word not in stop_words]
+        city = " ".join(words).strip()
+
+        if len(city) < 2:
+            return None
+
+        if re.search(r"\d", city):
+            return None
+
+        return city
 
     def _apply_price_rules(self, filters: SearchFilters, prompt: str) -> None:
         m = re.search(r"מ[\s-]*(\d{3,6})\s*עד\s*(\d{3,6})", prompt)
@@ -249,7 +347,16 @@ exclude אפשריים:
             "mamad": ["ממד", "ממ״ד", 'ממ"ד'],
             "elevator": ["מעלית"],
             "parking": ["חניה", "חנייה", "חניה פרטית"],
-            "pets_allowed": ["בעלי חיים", "חיות מחמד", "כלב", "חתול", "עם בעלי חיים", "מאפשר בעלי חיים"],
+            "pets_allowed": [
+                "בעלי חיים",
+                "חיות מחמד",
+                "חיית מחמד",
+                "כלב",
+                "חתול",
+                "עם בעלי חיים",
+                "מאפשר בעלי חיים",
+                "מתאים לבעלי חיים",
+            ],
             "balcony": ["מרפסת", "בלקון"],
             "furniture": ["ריהוט", "מרוהט", "מרוהטת", "רהיטים", "עם רהיטים"],
             "air_conditioner": ["מיזוג", "מזגן", "מזגנים"],
@@ -274,12 +381,9 @@ exclude אפשריים:
         filters.priceOnly = 1
         filters.zoom = filters.zoom or 11
 
-        # ברירת מחדל רחבה יותר במרכז — כדי שגם ראשון לציון / תל אביב / חולון / רמת גן יתפסו
         if not filters.bBox:
             filters.bBox = "31.930000,34.650000,32.350000,35.000000"
 
-        # לא עובדים יותר עם city_map ידני.
-        # אם יש עיר אחת/כמה ערים, הסינון המדויק נעשה אחרי map api לפי apartment.city.
         filters.multiNeighborhood = None
         filters.multiCity = None
         filters.multiArea = filters.multiArea or "18"
