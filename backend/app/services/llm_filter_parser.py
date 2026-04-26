@@ -327,20 +327,65 @@ exclude:
                 filters.minPrice = int(m.group(1))
 
     def _apply_room_rules(self, filters: SearchFilters, prompt: str) -> None:
-        m = re.search(r"בין\s*(\d+(?:\.\d+)?)\s*ל[\s-]*(\d+(?:\.\d+)?)\s*חדר", prompt)
+        normalized_prompt = prompt.replace("–", "-").replace("—", "-")
+
+        # דוגמאות:
+        # בין 2 ל-4 חדרים
+        # בין 2.5 ל-4 חדרים
+        m = re.search(
+            r"בין\s*(\d+(?:\.\d+)?)\s*ל[\s-]*(\d+(?:\.\d+)?)\s*חדר",
+            normalized_prompt,
+        )
+
+        # דוגמאות:
+        # 2-4 חדרים
+        # 2 - 4 חדרים
+        # 2.5-4 חדרים
+        if not m:
+            m = re.search(
+                r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*חדרים?",
+                normalized_prompt,
+            )
+
+        # דוגמאות:
+        # 2 עד 4 חדרים
+        # 2.5 עד 4 חדרים
+        if not m:
+            m = re.search(
+                r"(\d+(?:\.\d+)?)\s*עד\s*(\d+(?:\.\d+)?)\s*חדרים?",
+                normalized_prompt,
+            )
+
         if m:
             filters.minRooms = float(m.group(1))
             filters.maxRooms = float(m.group(2))
+            return
 
+        # דוגמאות:
+        # 3 חדרים ומעלה
+        # 2.5 חדרים ומעלה
         if filters.minRooms is None:
-            m = re.search(r"(\d+(?:\.\d+)?)\s*חדרים?\s*ומעלה", prompt)
+            m = re.search(r"(\d+(?:\.\d+)?)\s*חדרים?\s*ומעלה", normalized_prompt)
             if m:
                 filters.minRooms = float(m.group(1))
 
+        # דוגמאות:
+        # עד 4 חדרים
+        # עד 3.5 חדרים
         if filters.maxRooms is None:
-            m = re.search(r"עד\s*(\d+(?:\.\d+)?)\s*חדר", prompt)
+            m = re.search(r"עד\s*(\d+(?:\.\d+)?)\s*חדרים?", normalized_prompt)
             if m:
                 filters.maxRooms = float(m.group(1))
+
+        # דוגמה:
+        # דירת 3 חדרים
+        # במקרה כזה נשים גם מינימום וגם מקסימום 3
+        if filters.minRooms is None and filters.maxRooms is None:
+            m = re.search(r"(\d+(?:\.\d+)?)\s*חדרים?", normalized_prompt)
+            if m:
+                rooms = float(m.group(1))
+                filters.minRooms = rooms
+                filters.maxRooms = rooms
 
     def _apply_feature_rules(self, filters: SearchFilters, prompt: str) -> None:
         feature_rules = {

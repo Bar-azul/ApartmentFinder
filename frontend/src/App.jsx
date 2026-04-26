@@ -37,9 +37,7 @@ function getYad2Url(apartment) {
 }
 
 function App() {
-  const [prompt, setPrompt] = useState(
-    "חפש לי דירה בראשון לציון עם מרפסת מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
-  );
+  const [prompt, setPrompt] = useState("");
 
   const [selectedMustHave, setSelectedMustHave] = useState([]);
   const [apartments, setApartments] = useState([]);
@@ -52,6 +50,8 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
+
+  const isPromptEmpty = !prompt.trim();
 
   function toggleMustHave(featureKey) {
     setSelectedMustHave((prev) =>
@@ -66,6 +66,11 @@ function App() {
   }
 
   async function handleSearch() {
+    if (isPromptEmpty) {
+      setError("צריך לכתוב פרומפט לפני שמחפשים");
+      return;
+    }
+
     setLoading(true);
     setProgress(0);
     setError("");
@@ -79,7 +84,7 @@ function App() {
 
     try {
       const startResponse = await axios.post(`${API_BASE_URL}/api/search/start`, {
-        prompt,
+        prompt: prompt.trim(),
         must_have: selectedMustHave,
       });
 
@@ -142,13 +147,16 @@ function App() {
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="לדוגמה: חפש לי דירה בהרצליה עד 3500 שקל עם 2 חדרים"
+          placeholder="לדוגמה: חפש לי דירה בראשון לציון עם מרפסת מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
         />
 
-        <button onClick={handleSearch} disabled={loading}>
+        <button onClick={handleSearch} disabled={loading || isPromptEmpty}>
           {loading ? "מחפש..." : "חפש דירות"}
         </button>
       </section>
+
+
+      {loading && <SearchProgress progress={progress} />}
 
       <FeatureLegend
         selectedMustHave={selectedMustHave}
@@ -156,7 +164,6 @@ function App() {
         onClear={clearMustHave}
       />
 
-      {loading && <SearchProgress progress={progress} />}
 
       {error && <div className="error">{error}</div>}
 
