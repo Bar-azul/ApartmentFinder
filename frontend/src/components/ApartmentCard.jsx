@@ -56,7 +56,7 @@ function ApartmentCard({ apartment, onOpen, onOpenBrowser }) {
           </button>
 
           <button type="button" className="secondary-btn" onClick={onOpenBrowser}>
-            פתח ביד2
+            פתח ביד 2
           </button>
         </div>
       </div>
