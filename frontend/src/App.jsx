@@ -1,36 +1,23 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import axios from "axios";
 import "./App.css";
+
+import FeatureLegend from "./components/FeatureLegend";
+import ResultsHeader from "./components/ResultsHeader";
+import ApartmentCard from "./components/ApartmentCard";
+import ApartmentModal from "./components/ApartmentModal";
 
 const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
 ).replace(/\/$/, "");
 
-const FILTERABLE_FEATURES = [
-  { key: "mamad", label: "ממ״ד", example: "עם ממד / ממ״ד" },
-  { key: "elevator", label: "מעלית", example: "עם מעלית" },
-  { key: "parking", label: "חניה", example: "עם חניה / חנייה" },
-  { key: "balcony", label: "מרפסת", example: "עם מרפסת" },
-  { key: "furniture", label: "ריהוט", example: "מרוהטת / עם ריהוט" },
-  { key: "pets_allowed", label: "בעלי חיים", example: "עם בעלי חיים / כלב / חתול" },
-  { key: "air_conditioner", label: "מיזוג", example: "עם מזגן / מיזוג" },
-  { key: "renovated", label: "משופצת", example: "דירה משופצת" },
-  { key: "immediate_entrance", label: "כניסה מיידית", example: "כניסה מיידית" },
-  { key: "building_shelter", label: "מקלט", example: "עם מקלט" },
-];
-
-function formatPrice(price) {
-  if (price === null || price === undefined || price === "") return "מחיר לא צוין";
-  const numericPrice = Number(price);
-  if (Number.isNaN(numericPrice)) return "מחיר לא צוין";
-  return `₪ ${numericPrice.toLocaleString("he-IL")}`;
-}
+const VERIFY_POLL_INTERVAL_MS = 1200;
 
 function getYad2Url(apartment) {
   if (apartment?.yad2_url) return apartment.yad2_url;
 
   if (apartment?.token) {
-    return `https://www.yad2.co.il/realestate/item/center-and-sharon/${apartment.token}`;
+    return `https://www.yad2.co.il/realestate/item/${apartment.token}`;
   }
 
   return "https://www.yad2.co.il/realestate/rent";
@@ -38,20 +25,35 @@ function getYad2Url(apartment) {
 
 function App() {
   const [prompt, setPrompt] = useState("");
-
   const [selectedMustHave, setSelectedMustHave] = useState([]);
   const [apartments, setApartments] = useState([]);
   const [filters, setFilters] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
-
   const [selectedApartment, setSelectedApartment] = useState(null);
   const [expandedImage, setExpandedImage] = useState(null);
-
   const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verificationStats, setVerificationStats] = useState(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
 
+  const searchRunIdRef = useRef(0);
+  const searchPollRef = useRef(null);
+  const verifyPollRef = useRef(null);
+
   const isPromptEmpty = !prompt.trim();
+
+  function clearTimers() {
+    if (searchPollRef.current) {
+      clearInterval(searchPollRef.current);
+      searchPollRef.current = null;
+    }
+
+    if (verifyPollRef.current) {
+      clearInterval(verifyPollRef.current);
+      verifyPollRef.current = null;
+    }
+  }
 
   function toggleMustHave(featureKey) {
     setSelectedMustHave((prev) =>
@@ -65,22 +67,94 @@ function App() {
     setSelectedMustHave([]);
   }
 
+  async function startVerificationJob(apartmentsToVerify, requiredFeatures, runId) {
+    setApartments([]);
+    setVerifying(true);
+
+    setVerificationStats({
+      total: apartmentsToVerify.length,
+      checked: 0,
+      verified: 0,
+      rejected: 0,
+      failed: 0,
+      done: false,
+      fallback_mode: false,
+    });
+
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/search/verify/start`, {
+        apartments: apartmentsToVerify,
+        required_features: requiredFeatures || [],
+      });
+
+      const verifyJobId = response.data.job_id;
+
+      verifyPollRef.current = setInterval(async () => {
+        try {
+          if (runId !== searchRunIdRef.current) {
+            clearTimers();
+            return;
+          }
+
+          const progressResponse = await axios.get(
+            `${API_BASE_URL}/api/search/verify/progress/${verifyJobId}`
+          );
+
+          const job = progressResponse.data;
+
+          setApartments(job.verified_apartments || job.candidate_apartments || []);
+
+          setVerificationStats({
+            total: job.total || 0,
+            checked: job.checked || 0,
+            verified: job.verified || 0,
+            rejected: job.rejected || 0,
+            failed: job.failed || 0,
+            done: !!job.done,
+            fallback_mode: !!job.fallback_mode,
+            fallback_message: job.fallback_message || null,
+            status: job.status,
+          });
+
+          if (job.done) {
+            clearInterval(verifyPollRef.current);
+            verifyPollRef.current = null;
+            setVerifying(false);
+          }
+        } catch (err) {
+          clearInterval(verifyPollRef.current);
+          verifyPollRef.current = null;
+          setVerifying(false);
+          setError("שגיאה באימות המודעות");
+        }
+      }, VERIFY_POLL_INTERVAL_MS);
+    } catch (err) {
+      setVerifying(false);
+      setError(err.response?.data?.detail || "שגיאה בהתחלת אימות המודעות");
+    }
+  }
+
   async function handleSearch() {
     if (isPromptEmpty) {
       setError("צריך לכתוב פרומפט לפני שמחפשים");
       return;
     }
 
+    clearTimers();
+
+    searchRunIdRef.current += 1;
+    const currentRunId = searchRunIdRef.current;
+
     setLoading(true);
+    setVerifying(false);
     setProgress(0);
     setError("");
     setApartments([]);
     setFilters(null);
+    setVerificationStats(null);
     setShowFilters(false);
     setSelectedApartment(null);
     setExpandedImage(null);
-
-    let pollTimer = null;
 
     try {
       const startResponse = await axios.post(`${API_BASE_URL}/api/search/start`, {
@@ -90,7 +164,7 @@ function App() {
 
       const jobId = startResponse.data.job_id;
 
-      pollTimer = setInterval(async () => {
+      searchPollRef.current = setInterval(async () => {
         try {
           const progressResponse = await axios.get(
             `${API_BASE_URL}/api/search/progress/${jobId}`
@@ -100,12 +174,20 @@ function App() {
           setProgress(job.progress || 0);
 
           if (job.done) {
-            clearInterval(pollTimer);
+            clearInterval(searchPollRef.current);
+            searchPollRef.current = null;
+
+            if (currentRunId !== searchRunIdRef.current) return;
 
             if (job.success && job.result) {
+              const resultFilters = job.result.filters || null;
+              const rawApartments = job.result.apartments || [];
+              const requiredFeatures = resultFilters?.must_have || selectedMustHave || [];
+
+              setFilters(resultFilters);
               setProgress(100);
-              setApartments(job.result.apartments || []);
-              setFilters(job.result.filters || null);
+
+              await startVerificationJob(rawApartments, requiredFeatures, currentRunId);
             } else {
               setError(job.error || "שגיאה בחיפוש");
             }
@@ -116,24 +198,26 @@ function App() {
             }, 700);
           }
         } catch (err) {
-          clearInterval(pollTimer);
+          clearTimers();
           setError(err.message || "שגיאה בבדיקת התקדמות");
           setLoading(false);
           setProgress(0);
         }
       }, 800);
     } catch (err) {
-      if (pollTimer) clearInterval(pollTimer);
-
+      clearTimers();
       setError(err.response?.data?.detail || err.message || "שגיאה בהתחלת החיפוש");
       setLoading(false);
       setProgress(0);
     }
   }
 
+  function handleOpenApartment(apartment) {
+    setSelectedApartment(apartment);
+  }
+
   function handleOpenInYad2(apartment) {
-    const url = getYad2Url(apartment);
-    window.open(url, "_blank", "noopener,noreferrer");
+    window.open(getYad2Url(apartment), "_blank", "noopener,noreferrer");
   }
 
   return (
@@ -150,11 +234,10 @@ function App() {
           placeholder="לדוגמה: חפש לי דירה בראשון לציון עם מרפסת מ-4000 עד 5500 שקל, בין 2.5 ל-4 חדרים"
         />
 
-        <button onClick={handleSearch} disabled={loading || isPromptEmpty}>
-          {loading ? "מחפש..." : "חפש דירות"}
+        <button onClick={handleSearch} disabled={loading || verifying || isPromptEmpty}>
+          {loading ? "מחפש..." : verifying ? "מאמת מודעות..." : "חפש דירות"}
         </button>
       </section>
-
 
       {loading && <SearchProgress progress={progress} />}
 
@@ -163,7 +246,6 @@ function App() {
         onToggle={toggleMustHave}
         onClear={clearMustHave}
       />
-
 
       {error && <div className="error">{error}</div>}
 
@@ -189,17 +271,27 @@ function App() {
         </section>
       )}
 
-      <section className="results-header">
-        <h2>תוצאות</h2>
-        <span>{apartments.length} דירות נמצאו</span>
-      </section>
+      <ResultsHeader
+        apartmentsCount={apartments.length}
+        verificationStats={verificationStats}
+        isSearching={verifying}
+        loading={loading}
+      />
+
+      {verifying && apartments.length === 0 && (
+        <div className="verification-wait-box">
+          <strong>בודק מודעות ברקע...</strong>
+          <p>הכרטיסים יוצגו כאן רק אחרי שהמערכת תסיים לאמת אותם.</p>
+        </div>
+      )}
 
       <section className="grid">
         {apartments.map((apartment) => (
           <ApartmentCard
             key={`${apartment.order_id}-${apartment.token}`}
             apartment={apartment}
-            onOpen={() => setSelectedApartment(apartment)}
+            onOpen={() => handleOpenApartment(apartment)}
+            onOpenBrowser={() => handleOpenInYad2(apartment)}
           />
         ))}
       </section>
@@ -208,8 +300,8 @@ function App() {
         <ApartmentModal
           apartment={selectedApartment}
           onClose={() => setSelectedApartment(null)}
-          onImageOpen={setExpandedImage}
-          onOpenInYad2={() => handleOpenInYad2(selectedApartment)}
+          onImageClick={setExpandedImage}
+          onOpenBrowser={() => handleOpenInYad2(selectedApartment)}
         />
       )}
 
@@ -233,48 +325,11 @@ function App() {
   );
 }
 
-function FeatureLegend({ selectedMustHave, onToggle, onClear }) {
-  return (
-    <section className="feature-legend">
-      <div className="feature-legend-title">
-        <h3>מאפיינים שניתן לסנן לפיהם</h3>
-        <p>אפשר לכתוב אותם בפרומפט או פשוט ללחוץ על הכרטיסיות כאן ולסמן.</p>
-
-        {!!selectedMustHave.length && (
-          <button className="clear-features-button" onClick={onClear}>
-            נקה סימונים
-          </button>
-        )}
-      </div>
-
-      <div className="feature-legend-grid">
-        {FILTERABLE_FEATURES.map((feature) => {
-          const selected = selectedMustHave.includes(feature.key);
-
-          return (
-            <button
-              type="button"
-              className={`feature-legend-item ${selected ? "selected" : ""}`}
-              key={feature.key}
-              onClick={() => onToggle(feature.key)}
-              aria-pressed={selected}
-            >
-              <span className="feature-legend-badge">{feature.label}</span>
-              <small>{feature.example}</small>
-              {selected && <span className="selected-mark">✓ מסומן</span>}
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
 function SearchProgress({ progress }) {
   return (
     <div className="search-progress">
       <div className="progress-header">
-        <span>מחפש ומעשיר מודעות...</span>
+        <span>מחפש מודעות...</span>
         <strong>{progress}%</strong>
       </div>
 
@@ -284,153 +339,10 @@ function SearchProgress({ progress }) {
 
       <div className="progress-steps">
         <span className={progress >= 15 ? "active" : ""}>Map API</span>
-        <span className={progress >= 45 ? "active" : ""}>פתיחת מודעות</span>
-        <span className={progress >= 75 ? "active" : ""}>זיהוי מאפיינים</span>
+        <span className={progress >= 45 ? "active" : ""}>איסוף תוצאות</span>
+        <span className={progress >= 75 ? "active" : ""}>הכנת כרטיסים</span>
         <span className={progress >= 100 ? "active" : ""}>סיום</span>
       </div>
-    </div>
-  );
-}
-
-function ApartmentCard({ apartment, onOpen }) {
-  const image =
-    apartment.cover_image ||
-    apartment.images?.[0] ||
-    "https://placehold.co/600x400?text=No+Image";
-
-  return (
-    <article className="card">
-      <img src={image} alt="apartment" />
-
-      <div className="card-content">
-        <div className="price">{formatPrice(apartment.price)}</div>
-
-        <h3>
-          {apartment.property_type || "נכס"} · {apartment.rooms || "-"} חדרים
-        </h3>
-
-        <p className="location">
-          {apartment.city || ""}
-          {apartment.neighborhood ? `, ${apartment.neighborhood}` : ""}
-        </p>
-
-        <p>
-          {apartment.street || ""} {apartment.house_number || ""}
-        </p>
-
-        <div className="meta">
-          <span>{apartment.square_meter || "-"} מ״ר</span>
-          <span>קומה {apartment.floor ?? "-"}</span>
-        </div>
-
-        <FeatureBadges features={apartment.features} compact />
-
-        <button className="details-link-button" onClick={onOpen}>
-          פתח מודעה
-        </button>
-      </div>
-    </article>
-  );
-}
-
-function ApartmentModal({ apartment, onClose, onImageOpen, onOpenInYad2 }) {
-  const images = apartment.images?.length
-    ? apartment.images
-    : apartment.cover_image
-      ? [apartment.cover_image]
-      : [];
-
-  const description =
-    apartment.description || apartment.text || apartment.title || "אין תיאור זמין.";
-
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <button className="modal-close" onClick={onClose}>
-          ×
-        </button>
-
-        <div className="modal-gallery">
-          {images.length ? (
-            images.map((img, index) => (
-              <img
-                key={`${img}-${index}`}
-                src={img}
-                alt={`img-${index}`}
-                onClick={() => onImageOpen(img)}
-              />
-            ))
-          ) : (
-            <div className="no-image">אין תמונות</div>
-          )}
-        </div>
-
-        <div className="modal-content">
-          <h2>{formatPrice(apartment.price)}</h2>
-
-          <h3>
-            {apartment.property_type || "נכס"} · {apartment.rooms || "-"} חדרים ·{" "}
-            {apartment.square_meter || "-"} מ״ר
-          </h3>
-
-          <FeatureBadges features={apartment.features} />
-
-          <div className="description-box">
-            <h4>תיאור</h4>
-            <p>{description}</p>
-          </div>
-
-          <div className="modal-details-grid">
-            <p><strong>עיר:</strong> {apartment.city || "-"}</p>
-            <p><strong>שכונה:</strong> {apartment.neighborhood || "-"}</p>
-            <p>
-              <strong>רחוב:</strong> {apartment.street || "-"}{" "}
-              {apartment.house_number || ""}
-            </p>
-            <p><strong>קומה:</strong> {apartment.floor ?? "-"}</p>
-            <p><strong>מספר מודעה:</strong> {apartment.order_id || "-"}</p>
-          </div>
-
-          <div className="modal-actions">
-            {apartment.lat && apartment.lon && (
-              <a
-                className="map-link"
-                href={`https://www.google.com/maps?q=${apartment.lat},${apartment.lon}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                פתח מיקום במפה
-              </a>
-            )}
-
-            <button className="open-yad2-button" onClick={onOpenInYad2}>
-              לפתיחה ביד 2
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FeatureBadges({ features, compact = false }) {
-  if (!features) return null;
-
-  const active = FILTERABLE_FEATURES.filter((item) => features[item.key]);
-
-  if (!active.length) {
-    return compact ? null : (
-      <div className="features-empty">לא נמצאו מאפיינים מיוחדים</div>
-    );
-  }
-
-  return (
-    <div className={compact ? "features-row compact" : "features-row"}>
-      {active.map((item) => (
-        <span key={item.key} className="feature-badge">
-          {item.label}
-        </span>
-      ))}
     </div>
   );
 }

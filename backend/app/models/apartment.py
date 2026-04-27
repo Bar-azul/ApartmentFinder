@@ -41,4 +41,11 @@ class Apartment(BaseModel):
 
     features: ApartmentFeatures = Field(default_factory=ApartmentFeatures)
 
+    # new
+    verification_status: str = "not_required"
+    # not_required / pending / checking / verified / rejected / failed
+
+    verification_reason: str | None = None
+    required_features: list[str] = Field(default_factory=list)
+
     yad2_url: str | None = None

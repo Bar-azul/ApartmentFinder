@@ -8,6 +8,7 @@ from app.models.search_filters import DirectSearchRequest, PromptSearchRequest
 from app.services.llm_filter_parser import LLMFilterParser
 from app.services.playwright_details_service import PlaywrightDetailsService
 from app.services.search_progress_store import progress_store
+from app.services.verification_queue_store import verification_queue_store
 from app.services.yad2_client import Yad2Client
 
 logger = logging.getLogger(__name__)
@@ -75,12 +76,18 @@ async def _run_search_job(
             "filters": filters.model_dump(),
             "count": len(apartments),
             "apartments": [apartment.model_dump() for apartment in apartments],
+            "verification": {
+                "required": True,
+                "required_features": filters.must_have or [],
+                "mode": "background_queue",
+                "message": "התוצאות יאומתו ברקע ויוצגו רק לאחר אימות.",
+            },
         }
 
         progress_store.update(
             job_id,
             100,
-            "החיפוש הסתיים בהצלחה",
+            "החיפוש הסתיים. מתחילים אימות ברקע...",
             result=result,
             done=True,
             success=True,
@@ -114,6 +121,11 @@ async def search_by_prompt(request: PromptSearchRequest):
             "filters": filters.model_dump(),
             "count": len(apartments),
             "apartments": [apartment.model_dump() for apartment in apartments],
+            "verification": {
+                "required": True,
+                "required_features": filters.must_have or [],
+                "mode": "background_queue",
+            },
         }
 
     except Exception as e:
@@ -131,11 +143,45 @@ async def search_direct(request: DirectSearchRequest):
             "filters": request.filters.model_dump(),
             "count": len(apartments),
             "apartments": [apartment.model_dump() for apartment in apartments],
+            "verification": {
+                "required": True,
+                "required_features": request.filters.must_have or [],
+                "mode": "background_queue",
+            },
         }
 
     except Exception as e:
         logger.exception("Direct search failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/verify/start")
+async def start_background_verification(payload: dict):
+    apartments = payload.get("apartments") or []
+    required_features = payload.get("required_features") or []
+
+    if not apartments:
+        raise HTTPException(status_code=400, detail="No apartments provided")
+
+    job_id = verification_queue_store.create_job(
+        apartments=apartments,
+        required_features=required_features,
+    )
+
+    return {
+        "success": True,
+        "job_id": job_id,
+    }
+
+
+@router.get("/verify/progress/{job_id}")
+async def get_background_verification_progress(job_id: str):
+    job = verification_queue_store.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Verification job not found")
+
+    return job
 
 
 @router.post("/details")
@@ -155,6 +201,67 @@ async def get_apartment_details(apartment: Apartment):
 
         return {
             "success": False,
+            "error": str(e),
+            "apartment": apartment.model_dump(),
+        }
+
+
+@router.post("/verify-one")
+async def verify_one_apartment(apartment: Apartment):
+    try:
+        required_features = apartment.required_features or []
+
+        apartment.verification_status = "checking"
+        apartment.verification_reason = "בודק מאפיינים מול עמוד המודעה"
+
+        enriched = await details_service.enrich_apartment(apartment)
+
+        if not required_features:
+            enriched.verification_status = "verified"
+            enriched.verification_reason = "המודעה עברה העשרה ואימות"
+
+            return {
+                "success": True,
+                "matched": True,
+                "apartment": enriched.model_dump(),
+            }
+
+        missing_features = [
+            feature_name
+            for feature_name in required_features
+            if not getattr(enriched.features, feature_name, False)
+        ]
+
+        if missing_features:
+            enriched.verification_status = "rejected"
+            enriched.verification_reason = "המודעה לא כוללת את כל מאפייני החובה"
+
+            return {
+                "success": True,
+                "matched": False,
+                "missing_features": missing_features,
+                "apartment": enriched.model_dump(),
+            }
+
+        enriched.verification_status = "verified"
+        enriched.verification_reason = "המודעה אומתה ומתאימה לכל מאפייני החובה"
+
+        return {
+            "success": True,
+            "matched": True,
+            "missing_features": [],
+            "apartment": enriched.model_dump(),
+        }
+
+    except Exception as e:
+        logger.exception("Lazy apartment verification failed: %s", e)
+
+        apartment.verification_status = "failed"
+        apartment.verification_reason = f"שגיאה באימות המודעה: {str(e)}"
+
+        return {
+            "success": False,
+            "matched": False,
             "error": str(e),
             "apartment": apartment.model_dump(),
         }
